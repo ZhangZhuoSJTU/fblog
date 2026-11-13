@@ -9,6 +9,7 @@ mod filter;
 mod log;
 mod log_settings;
 mod process;
+mod strutil;
 mod substitution;
 mod template;
 mod time;

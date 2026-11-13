@@ -1,4 +1,5 @@
 use crate::log_settings::LogSettings;
+use crate::strutil;
 use crate::time::try_convert_timestamp_to_readable;
 use handlebars::Handlebars;
 use indexmap::IndexMap;
@@ -62,35 +63,43 @@ pub fn print_log_line(
 fn flatten_json(log_entry: &Map<String, Value>, prefix: &str) -> IndexMap<String, String> {
 	let mut flattened_json: IndexMap<String, String> = IndexMap::new();
 	for (key, value) in log_entry {
+		let prefixed_key = format!("{prefix}{key}");
 		match value {
 			Value::String(string_value) => {
-				flattened_json.insert(format!("{prefix}{key}"), string_value.to_string());
+				if strutil::looks_like_json(string_value) {
+					if let Ok(Value::Object(_parsed)) = serde_json::from_str(string_value) {
+						let nested_prefix = format!("{prefixed_key} > ");
+						flattened_json.extend(flatten_json(log_entry, &nested_prefix));
+						continue;
+					}
+				}
+				flattened_json.insert(prefixed_key, string_value.to_string());
 			}
 			Value::Bool(bool_value) => {
-				flattened_json.insert(format!("{prefix}{key}"), bool_value.to_string());
+				flattened_json.insert(prefixed_key, bool_value.to_string());
 			}
 			Value::Number(number_value) => {
-				flattened_json.insert(format!("{prefix}{key}"), number_value.to_string());
+				flattened_json.insert(prefixed_key, number_value.to_string());
 			}
 			Value::Array(array_values) => {
 				for (index, array_value) in array_values.iter().enumerate() {
-					let key = format!("{}[{}]", key, index);
+					let indexed_key = format!("{}[{}]", key, index);
 
 					match array_value {
-						Value::Array(array_values) => {
-							flatten_array(&key, prefix, array_values, &mut flattened_json);
+						Value::Array(nested_arr) => {
+							flatten_array(&indexed_key, prefix, nested_arr, &mut flattened_json);
 						}
 						Value::Object(nested_entry) => {
-							flattened_json.extend(flatten_json(nested_entry, &format!("{prefix}{key} > ")));
+							flattened_json.extend(flatten_json(nested_entry, &format!("{prefix}{indexed_key} > ")));
 						}
 						_ => {
-							flattened_json.insert(format!("{prefix}{key}"), array_value.to_string());
+							flattened_json.insert(format!("{prefix}{indexed_key}"), array_value.to_string());
 						}
 					};
 				}
 			}
 			Value::Object(nested_entry) => {
-				flattened_json.extend(flatten_json(nested_entry, &format!("{prefix}{key} > ")));
+				flattened_json.extend(flatten_json(nested_entry, &format!("{prefixed_key} > ")));
 			}
 			Value::Null => {}
 		};
@@ -98,30 +107,28 @@ fn flatten_json(log_entry: &Map<String, Value>, prefix: &str) -> IndexMap<String
 	flattened_json
 }
 
-fn flatten_array(key: &str, prefix: &str, array_values: &[Value], flattened_json: &mut IndexMap<String, String>) {
-	for (index, array_value) in array_values.iter().enumerate() {
-		let key = format!("{}[{}]", key, index + 1); // lua tables indexes start with 1
+fn flatten_array(parent_key: &str, prefix: &str, elements: &[Value], out: &mut IndexMap<String, String>) {
+	for (index, element) in elements.iter().enumerate() {
+		let indexed_key = format!("{}[{}]", parent_key, index + 1);
 
-		match array_value {
-			Value::Array(nested_array_values) => flatten_array(&key, prefix, nested_array_values, flattened_json),
+		match element {
+			Value::Array(nested_elements) => flatten_array(&indexed_key, prefix, nested_elements, out),
 			Value::Object(nested_entry) => {
-				flattened_json.extend(flatten_json(nested_entry, &format!("{prefix}{key} > ")));
+				out.extend(flatten_json(nested_entry, &format!("{prefix}{indexed_key} > ")));
 			}
 			_ => {
-				flattened_json.insert(format!("{prefix}{key}"), array_value.to_string());
+				out.insert(format!("{prefix}{indexed_key}"), element.to_string());
 			}
 		};
 	}
 }
 
-fn get_string_value(value: &IndexMap<String, String>, keys: &[String]) -> Option<String> {
-	keys
-		.iter()
-		.fold(None::<String>, |maybe_match, key| maybe_match.or_else(|| value.get(key).map(ToOwned::to_owned)))
+fn get_string_value(entry: &IndexMap<String, String>, keys: &[String]) -> Option<String> {
+	keys.iter().find_map(|k| entry.get(k).cloned())
 }
 
-fn get_string_value_or_default(value: &IndexMap<String, String>, keys: &[String], default: &str) -> String {
-	get_string_value(value, keys).unwrap_or_else(|| default.to_string())
+fn get_string_value_or_default(entry: &IndexMap<String, String>, keys: &[String], default: &str) -> String {
+	get_string_value(entry, keys).unwrap_or_else(|| default.to_string())
 }
 
 fn write_additional_values(out: &mut dyn Write, log_entry: &IndexMap<String, String>, additional_values: &[String], handlebars: &Handlebars<'static>) {
