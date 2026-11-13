@@ -21,47 +21,47 @@ pub fn process_input(
 ) {
 	for line in input.lines() {
 		match line {
-			Ok(read_line) => match process_input_line(log_settings, &read_line, None, maybe_filter, implicit_return, handlebars) {
-				Ok(_) => (),
-				Err(_) => print_raw_line(&read_line, &ORANGE),
-			},
-			Err(e) => {
-				print_raw_line(&format!("Could not read line: {e}"), &Color::Red);
+			Ok(raw_line) => {
+				let result = process_input_line(log_settings, &raw_line, None, maybe_filter, implicit_return, handlebars);
+				if result.is_err() {
+					emit_raw_line(&raw_line, &ORANGE);
+				}
+			}
+			Err(err) => {
+				emit_raw_line(&format!("Could not read line: {err}"), &Color::Red);
 			}
 		}
 	}
 }
 
-fn print_raw_line(line: &str, c: &Color) {
-	let write_result = writeln!(&mut io::stdout(), "{} {}", "??? >".fg(*c).bold(), line);
+fn emit_raw_line(line: &str, color: &Color) {
+	let write_result = writeln!(&mut io::stdout(), "{} {}", "??? >".fg(*color).bold(), line);
 	if write_result.is_err() {
-		// Output end reached
 		std::process::exit(14);
 	}
 }
 
 fn process_input_line(
 	log_settings: &LogSettings,
-	read_line: &str,
-	maybe_prefix: Option<&str>,
+	raw_line: &str,
+	prefix: Option<&str>,
 	maybe_filter: Option<&String>,
 	implicit_return: bool,
 	handlebars: &Handlebars<'static>,
 ) -> Result<(), ()> {
-	match serde_json::from_str::<Value>(read_line) {
+	match serde_json::from_str::<Value>(raw_line) {
 		Ok(Value::Object(log_entry)) => {
-			process_json_log_entry(log_settings, maybe_prefix, &log_entry, maybe_filter, implicit_return, handlebars);
+			handle_json_entry(log_settings, prefix, &log_entry, maybe_filter, implicit_return, handlebars);
 			Ok(())
 		}
 		_ => {
-			if log_settings.with_prefix && maybe_prefix.is_none() {
-				match read_line.find('{') {
-					Some(pos) => {
-						let prefix = &read_line[..pos];
-						let rest = &read_line[pos..];
-						process_input_line(log_settings, rest, Some(prefix), maybe_filter, implicit_return, handlebars)
-					}
-					None => Err(()),
+			if log_settings.with_prefix && prefix.is_none() {
+				if let Some(brace_pos) = raw_line.find('{') {
+					let line_prefix = &raw_line[..brace_pos];
+					let json_part = &raw_line[brace_pos..];
+					process_input_line(log_settings, json_part, Some(line_prefix), maybe_filter, implicit_return, handlebars)
+				} else {
+					Err(())
 				}
 			} else {
 				Err(())
@@ -70,27 +70,27 @@ fn process_input_line(
 	}
 }
 
-fn process_json_log_entry(
+fn handle_json_entry(
 	log_settings: &LogSettings,
-	maybe_prefix: Option<&str>,
+	prefix: Option<&str>,
 	log_entry: &Map<String, Value>,
 	maybe_filter: Option<&String>,
 	implicit_return: bool,
 	handlebars: &Handlebars<'static>,
 ) {
-	if let Some(filter) = maybe_filter {
-		match filter::show_log_entry(log_entry, filter, implicit_return, log_settings) {
-			Ok(true) => process_log_entry(log_settings, maybe_prefix, log_entry, handlebars),
+	if let Some(filter_expr) = maybe_filter {
+		match filter::show_log_entry(log_entry, filter_expr, implicit_return, log_settings) {
+			Ok(true) => render_entry(log_settings, prefix, log_entry, handlebars),
 			Ok(false) => (),
 			Err(e) => {
 				writeln!(io::stderr(), "{}: '{:?}'", "Failed to apply filter expression".red(), e).expect("Should be able to write to stderr");
 			}
 		}
 	} else {
-		process_log_entry(log_settings, maybe_prefix, log_entry, handlebars)
+		render_entry(log_settings, prefix, log_entry, handlebars)
 	}
 }
 
-fn process_log_entry(log_settings: &LogSettings, maybe_prefix: Option<&str>, log_entry: &Map<String, Value>, handlebars: &Handlebars<'static>) {
-	log::print_log_line(&mut io::stdout(), maybe_prefix, log_entry, log_settings, handlebars)
+fn render_entry(log_settings: &LogSettings, prefix: Option<&str>, log_entry: &Map<String, Value>, handlebars: &Handlebars<'static>) {
+	log::print_log_line(&mut io::stdout(), prefix, log_entry, log_settings, handlebars)
 }

@@ -19,8 +19,14 @@ fn timestamp_to_iso8601(timestamp: i64) -> Option<String> {
 		}
 		(LocalResult::Single(dt_secs), _) => Some(dt_secs.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
 		(_, LocalResult::Single(dt_millis)) => Some(dt_millis.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-		_ => None, // Neither is valid (or ambiguous due to time zone transitions)
+		_ => None,
 	}
+}
+
+fn try_parse_rfc2822(input: &str) -> Option<String> {
+	chrono::DateTime::parse_from_rfc2822(input)
+		.ok()
+		.map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 pub fn try_convert_timestamp_to_readable(input: String) -> String {
@@ -29,6 +35,10 @@ pub fn try_convert_timestamp_to_readable(input: String) -> String {
 	}
 
 	if let Some(parsed) = input.parse::<i64>().ok().and_then(timestamp_to_iso8601) {
+		return parsed;
+	}
+
+	if let Some(parsed) = try_parse_rfc2822(&input) {
 		return parsed;
 	}
 
